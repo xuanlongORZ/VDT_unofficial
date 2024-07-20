@@ -27,6 +27,9 @@ import datetime
 import torch
 import torch.distributed as dist
 
+import cv2
+
+
 class SmoothedValue(object):
     """Track a series of values and provide access to smoothed values over a
     window or the global series average.
@@ -318,4 +321,4 @@ def load_checkpoint(model, model_name):
     
     msg = model.load_state_dict(state_dict,strict=False)
     # print('load checkpoint from %s'%url_or_filename)  
-    return model,msg
+    return model, msg

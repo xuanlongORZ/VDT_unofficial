@@ -87,8 +87,8 @@ class VideoMaskGenerator:
         # idx = 1 Backward
         self.backward_given_frame_length = 8
 
-        # idx = 2 Interpreation
-        self.interpreation_step = 4
+        # idx = 2 Interpolation 
+        self.interpreation_step = 8
 
         # idx = 5 MLM ratio
         self.mlm_ratio = 0.8
@@ -102,7 +102,7 @@ class VideoMaskGenerator:
         return self.length, self.height, self.width
 
     def spatial_mask(self):
-        mask = np.zeros(shape=self.get_shape(), dtype=np.int)
+        mask = np.zeros(shape=self.get_shape(), dtype=np.int32)
 
 
         start_idx = random.randint(0, 3)
@@ -114,24 +114,34 @@ class VideoMaskGenerator:
         return mask
 
     def temporal_mask(self, idx=0):
-        mask = np.zeros(shape=self.get_shape(), dtype=np.int)
+        mask = np.zeros(shape=self.get_shape(), dtype=np.int32)
         # Predict
         if idx == 0:
             mask[self.predict_given_frame_length:] = 1
         # Backward
         elif idx == 1:
             mask[:-self.backward_given_frame_length] = 1
-        # Interpreation
+        # Interpolation
         elif idx == 2:
-            mask = np.ones(shape=self.get_shape(), dtype=np.int)
-            mask[::self.interpreation_step] = 0
+            # mask = np.ones(shape=self.get_shape(), dtype=np.int32)
+            # mask[::self.interpreation_step] = 0
+            t, _, _ = self.get_shape()
+            mask = np.ones(shape=self.get_shape(), dtype=np.int32)
+            if t < self.interpreation_step:
+                mask[1:-1, :, :] = 0
+            else:
+                start_idx = t - self.interpreation_step
+                start_idx = np.random.randint(0, start_idx)
+                mask[start_idx:start_idx+self.interpreation_step,:,:] = 0
+                # print('start_idx', start_idx)
+ 
         # Unconditional Generation
         elif idx == 3:
-            mask = np.ones(shape=self.get_shape(), dtype=np.int)
+            mask = np.ones(shape=self.get_shape(), dtype=np.int32)
         # Only one frames
         elif idx == 4:
             frame_idx = random.randint(0, mask.shape[0]-1)
-            mask = np.ones(shape=self.get_shape(), dtype=np.int)
+            mask = np.ones(shape=self.get_shape(), dtype=np.int32)
             mask[frame_idx] = 0
         # MLM
         else:
@@ -158,10 +168,11 @@ class VideoMaskGenerator:
 
 if __name__ == '__main__':
 
-    generator = VideoMaskGenerator((10,10,10))
-    print(generator())
-    mask = generator(4)
-    print(mask.shape)
+    generator = VideoMaskGenerator((10,10,10)) # t,h,w
+    # print(generator())
+    mask = generator(batch_size=1, idx=2)
+    print(mask.shape) # b, t, h, w
 
-    a = torch.ones(32, 4, 10, 10, 10,)
-    print((a[:] * mask).shape)
+    a = torch.ones(1, 4, 10, 10, 10) # b, c, t, h, w
+    mask = mask.unsqueeze(1) # b, c, t, h, w
+    print((a * mask).shape)

@@ -281,17 +281,33 @@ class GaussianDiffusion:
         # training = True
 
         B, C = x.shape[:2]
+
+        # print('x.shape', x.shape) # b, c, t, h, w
         
         assert t.shape == (B,)
-        x = x.permute(0, 2, 1, 3, 4)
+        # x = x.permute(0, 2, 1, 3, 4) # b, t, c, h, w
+
+        # print('raw_x.shape', raw_x.shape) # b, c, t, h, w
+        # print('mask.shape', mask.shape) # b, c, t, h, w
 
         if not self.training and mask is not None:
-            model_input = raw_x.permute(2, 0, 1, 3, 4) * (1-mask) + x.permute(2, 0, 1, 3, 4) * mask
-            model_input = model_input.permute(1, 2, 0, 3, 4)
+            # model_input = raw_x.permute(2, 0, 1, 3, 4) * (1-mask) + x.permute(2, 0, 1, 3, 4) * mask
+            # raw_x.shape torch.Size([8, 5, 4, 32, 32])
+            # mask.shape torch.Size([8, 5, 32, 32])
+            # x.shape torch.Size([8, 4, 5, 32, 32])
+            if len(mask.shape) == 4:
+                mask = mask.unsqueeze(1)
+                raw_x = raw_x.permute(0, 2, 1, 3, 4)
+            # print(mask.shape) # 2, 1, 12, 1, 1
+            # print(raw_x.shape) # 2, 4, 12, 32, 32
+            # print(x.shape) # 2, 4, 12, 32, 32
+            model_input = raw_x * (1 - mask) + x * mask
+            model_input = model_input.permute(0, 2, 1, 3, 4)
+            # B T C H W
             model_output = model(model_input, t, **model_kwargs)
         else:
             model_output = model(x, t, **model_kwargs)
-        x = x.permute(0, 2, 1, 3, 4)
+        # x = x.permute(0, 2, 1, 3, 4) # b, t, c
         if not self.training:
             model_output = model_output.permute(0, 2, 1, 3, 4)
 
@@ -301,7 +317,9 @@ class GaussianDiffusion:
             extra = None
 
         if self.model_var_type in [ModelVarType.LEARNED, ModelVarType.LEARNED_RANGE]:
-            assert model_output.shape == (B, C * 2, *x.shape[2:])
+            # assert model_output.shape == (B, C * 2, *x.shape[2:])
+            if model_output.shape != (B, C * 2, *x.shape[2:]):
+                model_output = model_output.permute(0, 2, 1, 3, 4)
             model_output, model_var_values = th.split(model_output, C, dim=1)
             min_log = _extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape)
             max_log = _extract_into_tensor(np.log(self.betas), t, x.shape)
@@ -594,30 +612,41 @@ class GaussianDiffusion:
             noise = th.randn_like(x_start)
         x_t = self.q_sample(x_start, t, noise=noise)
 
+        # torch.Size([2, 4, 12, 32, 32])
+        # torch.Size([2, 4, 12, 32, 32]) 
+        # torch.Size([2, 12, 1, 1, 1]) # b, t, c, h, w
+        mask = mask.permute(0, 2, 1, 3, 4)
+        # print(x_start.shape, x_t.shape, mask.shape) # b, c, t, h, w
         terms = {}
 
         if self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            x_t = x_t.permute(0, 2, 1, 3, 4)
+            # x_t = x_t.permute(0, 2, 1, 3, 4) # b, t, c, h, w
             # mask, C B T H W
-            model_input = x_start.permute(1, 0, 2, 3, 4) * (1-mask) + x_t.permute(2, 0, 1, 3, 4) * mask
+            # model_input = x_start.permute(1, 0, 2, 3, 4) * (1-mask) + x_t.permute(2, 0, 1, 3, 4) * mask
             # C B T H W -> B T C H W
-            model_input = model_input.permute(1, 2, 0, 3, 4)
-            model_output = model(model_input, t, **model_kwargs)
+            # model_input = model_input.permute(1, 2, 0, 3, 4) # t, c, b, h, w
 
-            x_t = x_t.permute(0, 2, 1, 3, 4)
+            model_input = x_start * (1 - mask) + x_t * mask
+            model_input = model_input.permute(0, 2, 1, 3, 4) # b, t, c, h, w
+            model_output = model(model_input, t, **model_kwargs) # b, t, c, h, w
+
+            # print('model_output.shape', model_output.shape) # torch.Size([2, 16, 8, 32, 32])
+            # x_t = x_t.permute(0, 2, 1, 3, 4) # b, t, c, h, w
+            # x_t # b, c, t, h, w
             if self.model_var_type in [
                 ModelVarType.LEARNED,
                 ModelVarType.LEARNED_RANGE,
             ]:
                 B, C = x_t.shape[:2]
                 model_output = model_output.permute(0, 2, 1, 3, 4)
+                # print('model_output.shape', model_output.shape) # torch.Size([2, 8, 16, 32, 32])
                 
                 assert model_output.shape == (B, C * 2, *x_t.shape[2:])
                 model_output, model_var_values = th.split(model_output, C, dim=1)
                 # Learn the variance using the variational bound, but don't let
                 # it affect our mean prediction.
                 frozen_out = th.cat([model_output.detach(), model_var_values], dim=1)
-
+                # (2, 0, 1, 3, 4) -> t, b, c, h, w
                 terms["vb"] = self._vb_terms_bpd(
                     model=lambda *args, r=frozen_out: r,
                     x_start=x_start,
@@ -640,7 +669,10 @@ class GaussianDiffusion:
             }[self.model_mean_type]
             assert model_output.shape == target.shape == x_start.shape #([2, 4, 16, 16, 16]
 
-            terms["mse"] = mean_flat(((target - model_output).permute(1, 0, 2, 3, 4) * mask).permute(1, 0, 2, 3, 4)  ** 2)
+            # print('(target - model_output).shape', (target - model_output).shape) # torch.Size([2, 4, 16, 32, 32])
+            # print('mask.shape', mask.shape) # torch.Size([2, 1, 16, 1, 1])
+            # terms["mse"] = mean_flat(((target - model_output).permute(1, 0, 2, 3, 4) * mask).permute(1, 0, 2, 3, 4)  ** 2)
+            terms["mse"] = mean_flat(((target - model_output) * mask)  ** 2)
             if "vb" in terms:
                 terms["loss"] = terms["mse"] + terms["vb"]
             else:
