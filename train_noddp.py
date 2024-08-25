@@ -111,7 +111,7 @@ def main(args):
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
     model = model.to(device)
-    diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
+    diffusion = create_diffusion(timestep_respacing="", training=True)  # default: 1000 steps, linear noise schedule
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
     logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
@@ -138,8 +138,8 @@ def main(args):
 
     # Prepare models for training:
     update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
-    model.train()  # important! This enables embedding dropout for classifier-free guidance
     ema.eval()  # EMA model should always be in eval mode
+    model.train()  # important! This enables embedding dropout for classifier-free guidance
 
     # Variables for monitoring/logging purposes:
     train_steps = 0
@@ -166,6 +166,7 @@ def main(args):
                 t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
                 # model_kwargs = dict(y=y)
                 # loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+                # print(mask.shape, x.shape, t.shape)
                 loss_dict = diffusion.training_losses(model = model, x_start = x, t = t, mask = mask)
                 loss = loss_dict["loss"].mean()
                 opt.zero_grad()
@@ -203,14 +204,15 @@ def main(args):
                         "model": model.state_dict(),
                         "ema": ema.state_dict(),
                         "opt": opt.state_dict(),
+                        "pos_embed": model.pos_embed,  # 将位置嵌入存入checkpoint中
                         "args": args
                     }
                     checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
 
-    model.eval()  # important! This disables randomized embedding dropout
-    # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
+    # model.eval()  # important! This disables randomized embedding dropout
+    # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...a
 
     logger.info("Done!")
     # cleanup()
@@ -226,12 +228,12 @@ if __name__ == "__main__":
     parser.add_argument("--global-batch-size", type=int, default=2)
 
     parser.add_argument("--num_frames", type=int, default=12)
-    parser.add_argument("--data-path", type=str, default='/root/dataset/videos/')
+    parser.add_argument("--data-path", type=str, default='/root/autodl-tmp/VDT_unofficial/datasets/UCF-101')
     parser.add_argument("--results-dir", type=str, default="results")
-    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--global-seed", type=int, default=0)
-    parser.add_argument("--num-workers", type=int, default=16)
+    parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--log-every", type=int, default=500)
-    parser.add_argument("--ckpt-every", type=int, default=2000)
+    parser.add_argument("--ckpt-every", type=int, default=6000)
     args = parser.parse_args()
     main(args)

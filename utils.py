@@ -304,21 +304,39 @@ def interpolate_pos_embed(pos_embed_checkpoint, visual_encoder):
         return new_pos_embed    
     else:
         return pos_embed_checkpoint
-
-
 def load_checkpoint(model, model_name):
+    """
+        unoffical code
+    """
     state_dict = torch.load(model_name, map_location='cpu')
+    # Check if 'pos_embed' exists before attempting to interpolate
+    if 'pos_embed' in state_dict:
+        state_dict['pos_embed'] = interpolate_pos_embed(state_dict['pos_embed'], model)
+    else:
+        print("Warning: 'pos_embed' is missing in the checkpoint.")
 
-    state_dict['pos_embed'] = interpolate_pos_embed(state_dict['pos_embed'],model) 
- 
     for key in model.state_dict().keys():
-
         if key in state_dict.keys():
-            if state_dict[key].shape!=model.state_dict()[key].shape:
+            if state_dict[key].shape != model.state_dict()[key].shape:
                 print('state_dict[key].shape', key, state_dict[key].shape)
                 print('model.state_dict()[key].shape', key, model.state_dict()[key].shape)
                 del state_dict[key]
-    
-    msg = model.load_state_dict(state_dict,strict=False)
-    # print('load checkpoint from %s'%url_or_filename)  
+
+    msg = model.load_state_dict(state_dict, strict=False)
     return model, msg
+# def load_checkpoint(model, model_name):
+#     state_dict = torch.load(model_name, map_location='cpu')
+
+#     state_dict['pos_embed'] = interpolate_pos_embed(state_dict['pos_embed'],model) 
+ 
+#     for key in model.state_dict().keys():
+
+#         if key in state_dict.keys():
+#             if state_dict[key].shape!=model.state_dict()[key].shape:
+#                 print('state_dict[key].shape', key, state_dict[key].shape)
+#                 print('model.state_dict()[key].shape', key, model.state_dict()[key].shape)
+#                 del state_dict[key]
+    
+#     msg = model.load_state_dict(state_dict,strict=False)
+#     # print('load checkpoint from %s'%url_or_filename)  
+#     return model, msg
