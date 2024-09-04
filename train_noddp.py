@@ -78,9 +78,11 @@ def create_logger(logging_dir):
 #################################################################################
 
 def main(args):
+    
     """
     Trains a new DiT model.
     """
+
     assert torch.cuda.is_available(), "Training currently requires at least one GPU."
 
     # Setup DDP:
@@ -103,7 +105,7 @@ def main(args):
     assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
     latent_size = args.image_size // 8
     model = VDT_models[args.model](
-        input_size=latent_size,
+        input_size=latent_size, 
         num_classes=args.num_classes,
         num_frames=args.num_frames
     )
@@ -112,7 +114,7 @@ def main(args):
     requires_grad(ema, False)
     model = model.to(device)
     diffusion = create_diffusion(timestep_respacing="", training=True)  # default: 1000 steps, linear noise schedule
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
+    vae = AutoencoderKL.from_pretrained("/home/ligongru/VDT_unofficial/sd-vae-ft-ema").to(device)
     logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
@@ -125,7 +127,7 @@ def main(args):
     ])
 
     # dataset = ImageFolder(args.data_path, transform=transform)
-    dataset = VideoDataset(args.data_path, frames_per_clip=args.num_frames, transform=transform, mask_ratio=0.8)
+    dataset = VideoDataset(args.data_path, frames_per_clip=args.num_frames, transform=transform, mask_ratio=0)
     loader = DataLoader(
         dataset,
         batch_size=int(args.global_batch_size),
@@ -223,12 +225,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, choices=list(VDT_models.keys()), default="VDT-L/2")
     parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")  # Choice doesn't affect training
-    parser.add_argument("--image-size", type=int,  default=256)
+    parser.add_argument("--image-size", type=int,  default=64)
     parser.add_argument("--num-classes", type=int, default=1)
-    parser.add_argument("--global-batch-size", type=int, default=2)
-
+    parser.add_argument("--global-batch-size", type=int, default=1)
     parser.add_argument("--num_frames", type=int, default=12)
-    parser.add_argument("--data-path", type=str, default='/root/autodl-tmp/VDT_unofficial/datasets/UCF-101')
+    parser.add_argument("--data-path", type=str, default='/home/ligongru/VDT_unofficial/datasets/UCF-101')
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--global-seed", type=int, default=0)

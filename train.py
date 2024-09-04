@@ -34,6 +34,7 @@ from diffusion import create_diffusion
 from diffusers.models import AutoencoderKL
 
 from dataset import VideoDataset
+from mask_generator import VideoMaskGenerator
 
 #################################################################################
 #                             Training Helper Functions                         #
@@ -144,14 +145,15 @@ def main(args):
     latent_size = args.image_size // 8
     model = VDT_models[args.model](
         input_size=latent_size,
-        num_classes=args.num_classes
+        num_classes=args.num_classes,
+        num_frames=args.num_frames
     )
     # Note that parameter initialization is done within the DiT constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
     model = DDP(model.to(device), device_ids=[rank])
-    diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
+    diffusion = create_diffusion(timestep_respacing="", training=True)  # default: 1000 steps, linear noise schedule
+    vae = AutoencoderKL.from_pretrained("/home/ligongru/VDT_unofficial/sd-vae-ft-ema").to(device)
     logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
@@ -173,7 +175,7 @@ def main(args):
     ])
 
     # dataset = ImageFolder(args.data_path, transform=transform)
-    dataset = VideoDataset(args.data_path, frames_per_clip=args.num_frames, transform=transform, mask_ratio=0.8)
+    dataset = VideoDataset(args.data_path, frames_per_clip=args.num_frames, transform=transform, mask_ratio=0.)
     sampler = DistributedSampler(
         dataset,
         num_replicas=dist.get_world_size(),
@@ -208,15 +210,17 @@ def main(args):
         sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
         with tqdm(total=len(loader), desc=f'Epoch {epoch}/{args.epochs}', unit='sample') as pbar:
-            for idx, (mask, clip) in enumerate(loader):
-                mask = mask.to(device)
+            for idx, clip in enumerate(loader):
                 clip = clip.to(device)
                 B, T, C, H, W = clip.shape
                 # x = x.view(-1, C, H, W).to(device=device)
                 clip = clip.view(-1, C, H, W).to(device=device)
                 with torch.no_grad():
                     # Map input images to latent space + normalize latents:
-                    x = vae.encode(x).latent_dist.sample().mul_(0.18215)
+                    x = vae.encode(clip).latent_dist.sample().mul_(0.18215)
+                generator = VideoMaskGenerator((T,H//8,W//8)) # t,h,w
+                mask = generator(batch_size=4, idx=2).unsqueeze(0) # 1,C,T,H,W
+                mask = 1 - mask.permute(0,2,1,3,4).to(device=clip.device) # 1,T,C,H,W
                 x = x.view(-1, args.num_frames, 4, x.shape[-2], x.shape[-1])
                 t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
                 loss_dict = diffusion.training_losses(model = model, x_start = x, t = t, mask = mask)
@@ -257,6 +261,7 @@ def main(args):
                             "model": model.module.state_dict(),
                             "ema": ema.state_dict(),
                             "opt": opt.state_dict(),
+                            "pos_embed": model.module.pos_embed,  # 将位置嵌入存入checkpoint中
                             "args": args
                         }
                         checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
@@ -264,7 +269,7 @@ def main(args):
                         logger.info(f"Saved checkpoint to {checkpoint_path}")
                     dist.barrier()
 
-    model.eval()  # important! This disables randomized embedding dropout
+    # model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
 
     logger.info("Done!")
@@ -276,17 +281,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, choices=list(VDT_models.keys()), default="VDT-L/2")
     parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")  # Choice doesn't affect training
-    parser.add_argument("--image-size", type=int,  default=256)
+    parser.add_argument("--image-size", type=int,  default=64)
     parser.add_argument("--num-classes", type=int, default=1)
     parser.add_argument("--global-batch-size", type=int, default=2)
 
     parser.add_argument("--num_frames", type=int, default=12)
-    parser.add_argument("--data-path", type=str, default='/root/dataset/videos/')
+    parser.add_argument("--data-path", type=str, default='/home/ligongru/VDT_unofficial/datasets/UCF-101')
     parser.add_argument("--results-dir", type=str, default="results")
-    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--global-seed", type=int, default=0)
-    parser.add_argument("--num-workers", type=int, default=16)
-    parser.add_argument("--log-every", type=int, default=10)
-    parser.add_argument("--ckpt-every", type=int, default=1000)
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--log-every", type=int, default=500)
+    parser.add_argument("--ckpt-every", type=int, default=6000)
     args = parser.parse_args()
     main(args)
